@@ -1,15 +1,9 @@
 package avl
 
 import (
-	"errors"
 	"sync"
 
 	"golang.org/x/exp/constraints"
-)
-
-var (
-	ErrNotFound = errors.New("not found")
-	ErrExists   = errors.New("already esists")
 )
 
 type ordered = constraints.Ordered
@@ -91,7 +85,7 @@ func balance[K ordered, V any](pn **node[K, V]) {
 	}
 }
 
-func popMostLeft[K ordered, V any](pn **node[K, V]) *node[K, V] {
+func mostLeft[K ordered, V any](pn **node[K, V]) *node[K, V] {
 	t := *pn
 	if t == nil {
 		return nil
@@ -100,9 +94,37 @@ func popMostLeft[K ordered, V any](pn **node[K, V]) *node[K, V] {
 		return t
 	}
 	if t.left.left == nil {
+		return t.left
+	}
+	return mostLeft(&t.left)
+}
+
+func mostRight[K ordered, V any](pn **node[K, V]) *node[K, V] {
+	t := *pn
+	if t == nil {
+		return nil
+	}
+	if t.right == nil {
+		return t
+	}
+	if t.right.right == nil {
+		return t.right
+	}
+	return mostRight(&t.right)
+}
+
+func popMostLeft[K ordered, V any](pn **node[K, V]) *node[K, V] {
+	t := *pn
+	if t == nil {
+		return nil
+	}
+	if t.left == nil {
+		return t
+	}
+	defer balance(pn)
+	if t.left.left == nil {
 		mostLeft := t.left
-		t.left = nil
-		balance(pn)
+		t.left = t.left.right
 		return mostLeft
 	}
 	return popMostLeft(&t.left)
@@ -116,41 +138,34 @@ func popMostRight[K ordered, V any](pn **node[K, V]) *node[K, V] {
 	if t.right == nil {
 		return t
 	}
+	defer balance(pn)
 	if t.right.right == nil {
 		mostRight := t.right
-		t.right = nil
-		balance(pn)
+		t.right = t.right.left
 		return mostRight
 	}
 	return popMostRight(&t.right)
 }
 
-func insert[K ordered, V any](pn **node[K, V], child *node[K, V]) error {
+func insert[K ordered, V any](pn **node[K, V], child *node[K, V]) {
 	if *pn == nil {
 		*pn = child
 		(*pn).updateHeight()
-		return nil
+		return
 	}
 
 	t := *pn
 	switch {
 	case child.key == t.key:
-		return ErrExists
+		t.value = child.value
 	case child.key < t.key:
-		err := insert(&t.left, child)
-		if err != nil {
-			return err
-		}
+		insert(&t.left, child)
 	case child.key > t.key:
-		err := insert(&t.right, child)
-		if err != nil {
-			return err
-		}
+		insert(&t.right, child)
 	}
 
 	(*pn).updateHeight()
 	balance(pn)
-	return nil
 }
 
 func find[K ordered, V any](pn **node[K, V], key K) *node[K, V] {
@@ -170,10 +185,10 @@ func find[K ordered, V any](pn **node[K, V], key K) *node[K, V] {
 	}
 }
 
-func remove[K ordered, V any](pn **node[K, V], key K) error {
+func remove[K ordered, V any](pn **node[K, V], key K) *node[K, V] {
 	t := *pn
 	if t == nil {
-		return ErrNotFound
+		return nil
 	}
 
 	switch {
@@ -181,7 +196,6 @@ func remove[K ordered, V any](pn **node[K, V], key K) error {
 		if t.left._height() > t.right._height() {
 			mostRight := popMostRight(&t.left)
 			if mostRight != nil {
-				mostRight.left = t.left
 				mostRight.right = t.right
 				*pn = mostRight
 			} else {
@@ -191,42 +205,53 @@ func remove[K ordered, V any](pn **node[K, V], key K) error {
 			mostLeft := popMostLeft(&t.right)
 			if mostLeft != nil {
 				mostLeft.left = t.left
-				mostLeft.right = t.right
 				*pn = mostLeft
 			} else {
 				*pn = t.left
 			}
 		}
+		t.height = 1
+		t.left = nil
+		t.right = nil
 	case key < t.key:
-		err := remove(&t.left, key)
-		if err != nil {
-			return err
-		}
+		return remove(&t.left, key)
 	case key > t.key:
-		err := remove(&t.right, key)
-		if err != nil {
-			return err
-		}
+		return remove(&t.right, key)
 	}
 
 	(*pn).updateHeight()
 	balance(pn)
-	return nil
+
+	return t
 }
 
-func (t *node[K, V]) _range(f func(key K, value V) bool) bool {
+func (t *node[K, V]) _range(f func(key K, value V) bool, reverse bool) bool {
 	if t == nil {
 		return true
 	}
 
-	if ok := t.left._range(f); !ok {
-		return false
+	if reverse {
+		if ok := t.right._range(f, reverse); !ok {
+			return false
+		}
+	} else {
+		if ok := t.left._range(f, reverse); !ok {
+			return false
+		}
 	}
+
 	if ok := f(t.key, t.value); !ok {
 		return false
 	}
-	if ok := t.right._range(f); !ok {
-		return false
+
+	if reverse {
+		if ok := t.left._range(f, reverse); !ok {
+			return false
+		}
+	} else {
+		if ok := t.right._range(f, reverse); !ok {
+			return false
+		}
 	}
 
 	return true
@@ -241,53 +266,98 @@ func New[K constraints.Ordered, V any]() *Tree[K, V] {
 	return &Tree[K, V]{}
 }
 
-func (t *Tree[K, V]) Insert(key K, value V) error {
+func (t *Tree[K, V]) Store(key K, value V) {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
-
-	child := &node[K, V]{
+	insert(&t.root, &node[K, V]{
 		key:   key,
 		value: value,
-	}
-
-	return insert(&t.root, child)
+	})
 }
 
-func (t *Tree[K, V]) Get(key K) (V, error) {
+func (t *Tree[K, V]) Load(key K) (value V, ok bool) {
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
-
 	n := find(&t.root, key)
 	if n == nil {
-		var v V
-		return v, ErrNotFound
+		return
 	}
-
-	return n.value, nil
+	return n.value, true
 }
 
-func (t *Tree[K, V]) Remove(key K) error {
+func (t *Tree[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
-
-	if t.root == nil {
-		return ErrNotFound
+	n := remove(&t.root, key)
+	if n == nil {
+		return
 	}
+	return n.value, true
+}
 
-	if t.root._height() == 1 && t.root.key == key {
-		t.root = nil
-		return nil
+func (t *Tree[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	n := find(&t.root, key)
+	if n == nil {
+		insert(&t.root, &node[K, V]{
+			key:   key,
+			value: value,
+		})
+		return value, false
 	}
+	return n.value, true
+}
 
-	err := remove(&t.root, key)
-	if err != nil {
-		return err
+func (t *Tree[K, V]) LoadOrStoreCreate(key K, create func() V) (actual V, loaded bool) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	n := find(&t.root, key)
+	if n == nil {
+		value := create()
+		insert(&t.root, &node[K, V]{
+			key:   key,
+			value: value,
+		})
+		return value, false
 	}
-	return nil
+	return n.value, true
+}
+
+func (t *Tree[K, V]) Delete(key K) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	remove(&t.root, key)
 }
 
 func (t *Tree[K, V]) Range(f func(key K, value V) bool) {
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
-	t.root._range(f)
+	t.root._range(f, false)
+}
+
+func (t *Tree[K, V]) RangeReverse(f func(key K, value V) bool) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	t.root._range(f, true)
+}
+
+func (t *Tree[K, V]) First() (key K, value V, exists bool) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	n := mostLeft(&t.root)
+	if n == nil {
+		return
+	}
+	return n.key, n.value, true
+}
+
+func (t *Tree[K, V]) Last() (key K, value V, exists bool) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	n := mostRight(&t.root)
+	if n == nil {
+		return
+	}
+	return n.key, n.value, true
 }
