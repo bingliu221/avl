@@ -1,4 +1,4 @@
-module avl
+module github.com/bingliu221/avl
 
 go 1.19
 
