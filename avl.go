@@ -214,9 +214,9 @@ func remove[K ordered, V any](pn **node[K, V], key K) *node[K, V] {
 		t.left = nil
 		t.right = nil
 	case key < t.key:
-		return remove(&t.left, key)
+		t = remove(&t.left, key)
 	case key > t.key:
-		return remove(&t.right, key)
+		t = remove(&t.right, key)
 	}
 
 	(*pn).updateHeight()
@@ -229,6 +229,8 @@ func (t *node[K, V]) _range(f func(key K, value V) bool, reverse bool) bool {
 	if t == nil {
 		return true
 	}
+
+	fmt.Println(t)
 
 	if reverse {
 		if ok := t.right._range(f, reverse); !ok {
