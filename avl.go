@@ -230,8 +230,6 @@ func (t *node[K, V]) _range(f func(key K, value V) bool, reverse bool) bool {
 		return true
 	}
 
-	fmt.Println(t)
-
 	if reverse {
 		if ok := t.right._range(f, reverse); !ok {
 			return false
